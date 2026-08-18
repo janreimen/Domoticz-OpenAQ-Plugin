@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.log
+*.db
+*.sqlite
+.env
+.venv/
+venv/
+*.key
+*.pem
+*.crt
+.vscode/.ropeproject/config.py
+.vscode/.ropeproject/objectdb
