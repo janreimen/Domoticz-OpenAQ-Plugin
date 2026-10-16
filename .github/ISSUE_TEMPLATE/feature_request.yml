@@ -1,0 +1,89 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem you want to solve and the proposed improvement.
+
+        For features that depend on OpenAQ data, explain which pollutants or parameters are relevant and whether the OpenAQ API provides them. Do not include your API key or home coordinates.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a problem?
+      description: Explain the limitation or use case.
+      placeholder: I would like to be able to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe how you would like the feature to work.
+      placeholder: The plugin should...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any workarounds or alternative solutions.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Feature category
+      options:
+        - Pollutants or additional parameters
+        - Air Quality Index or alerts
+        - Location selection or multiple locations
+        - Units or data quality
+        - Domoticz devices or presentation
+        - Configuration or installation
+        - Logging or diagnostics
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Relevant OpenAQ location(s)
+      description: Enter the location ID and country if the request depends on a specific station.
+      placeholder: "e.g. 9645 (LU)"
+    validations:
+      required: false
+
+  - type: textarea
+    id: api
+    attributes:
+      label: API availability or limitations
+      description: If known, explain whether the functionality is available through the OpenAQ API.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots or examples are welcome if all sensitive information is removed.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked existing issues, the documentation and `ROADMAP.md` for this feature.
+          required: true
+        - label: I have not included my API key or personal data.
+          required: true

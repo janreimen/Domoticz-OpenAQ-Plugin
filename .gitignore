@@ -1,13 +1,33 @@
+# Python
 __pycache__/
-*.pyc
-*.log
-*.db
-*.sqlite
+*.py[cod]
+.pytest_cache/
+
+# Environments and secrets
 .env
+.env.*
 .venv/
 venv/
+*.secret
 *.key
 *.pem
 *.crt
-.vscode/.ropeproject/config.py
-.vscode/.ropeproject/objectdb
+
+# Local Domoticz configuration
+config.local.py
+
+# Logs and local databases
+*.log
+*.db
+*.sqlite
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local working files
+archives/
+*.patch
+*.bak

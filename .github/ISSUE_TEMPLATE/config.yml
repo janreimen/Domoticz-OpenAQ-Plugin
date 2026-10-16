@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Domoticz community forum
+    url: https://forum.domoticz.com/
+    about: Ask general Domoticz usage questions and get help from the community.
+  - name: OpenAQ API documentation
+    url: https://docs.openaq.org
+    about: Check how the OpenAQ API behaves, its rate limits, and how to get an API key.
+  - name: Domoticz-OpenAQ-Plugin repository
+    url: https://github.com/janreimen/Domoticz-OpenAQ-Plugin
+    about: Read the project documentation and review existing releases before opening an issue.

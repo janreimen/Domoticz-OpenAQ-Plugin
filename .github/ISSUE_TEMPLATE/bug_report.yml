@@ -1,0 +1,134 @@
+name: Bug report
+description: Report a reproducible problem with Domoticz-OpenAQ-Plugin
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a problem.
+
+        Please search existing issues first, and check `ROADMAP.md` for known defects.
+
+        **Never include your OpenAQ API key, your home coordinates, or other unredacted personal data.** With Debug enabled the plugin writes the API key (the `Parameter 'Mode2'` line) and the Domoticz location (the `Setting 'Location'` line) to the log. Remove those values before posting a log.
+
+  - type: input
+    id: plugin_version
+    attributes:
+      label: Plugin version
+      description: The exact version of your installation.
+      placeholder: "e.g. 4.0"
+    validations:
+      required: true
+
+  - type: input
+    id: domoticz_version
+    attributes:
+      label: Domoticz version
+      description: Include the build or release identifier if available.
+      placeholder: "e.g. 2026.4"
+    validations:
+      required: true
+
+  - type: input
+    id: operating_system
+    attributes:
+      label: Operating system
+      description: Include the platform and version.
+      placeholder: "e.g. Raspberry Pi OS, Debian, Synology DSM, Docker"
+    validations:
+      required: true
+
+  - type: input
+    id: location_id
+    attributes:
+      label: OpenAQ location ID and country
+      description: The numeric OpenAQ location ID the plugin is reading, and the country, if known.
+      placeholder: "e.g. 9645 (LU)"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: location_mode
+    attributes:
+      label: How was the location chosen?
+      options:
+        - I entered the Location ID
+        - Left blank (auto-detected)
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue_area
+    attributes:
+      label: Affected functionality
+      options:
+        - Installation or configuration
+        - API key or authentication
+        - Location lookup (auto-detect or Location ID)
+        - Pollutant values or units
+        - Air Quality Index or Pollutants alert
+        - Info device
+        - Domoticz device creation
+        - Plugin startup, heartbeat or shutdown
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Describe the problem
+      description: Explain what happens and why it is unexpected.
+      placeholder: A clear description of the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: List the actions needed to reproduce the issue.
+      placeholder: |
+        1. Configure the plugin...
+        2. Wait for an update...
+        3. Observe the result...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      placeholder: What should happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Include only relevant, redacted log excerpts. Remove the API key, your location coordinates, and any personal information.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional information
+      description: Mention whether the issue is reproducible and whether it worked in an earlier version.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for a similar problem.
+          required: true
+        - label: I removed my API key and location coordinates from this report.
+          required: true
