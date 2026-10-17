@@ -6,10 +6,11 @@ Security fixes are intended for the current release.
 
 | Version | Supported |
 |---|---|
-| 4.0.x | ✅ Supported |
-| < 4.0 | ❌ Not supported |
+| 4.1.x | ✅ Supported |
+| 4.0.x | ❌ Not supported: shows the API key in clear text in the hardware form, and writes the key and your location to the log with Debug on (and your coordinates to the log on a failed lookup) |
+| < 4.0 | ❌ Not supported: these versions use OpenAQ API versions that OpenAQ has retired |
 
-The current release is **4.0**. Versions before 4.0 use OpenAQ API versions that OpenAQ has retired and no longer work, so upgrading to the latest release is required rather than merely recommended.
+The current release is **4.1**. Upgrading from 4.0 is safe: devices and history are kept.
 
 ## Reporting a vulnerability
 
@@ -23,21 +24,25 @@ This is a hobby project maintained in my free time. Reports are reviewed regular
 
 ## API key and private data
 
-The OpenAQ API key is entered in the Domoticz hardware configuration (field **OpenAQ API-KEY**). Please be aware of the following:
+The OpenAQ API key is entered in the Domoticz hardware configuration (field **OpenAQ API-KEY**).
 
-- **The field is not masked.** The key is shown in clear text in the Domoticz hardware form.
-- **Debug logging prints the key.** With **Debug** set to `True`, the plugin writes every hardware parameter to the Domoticz log, including the API key, and every Domoticz setting, including your **Location** (latitude and longitude). Keep Debug off in normal operation, and redact these lines before sharing a log. The plugin never writes the key at the normal log level.
+- **The field is masked** in the Domoticz hardware form (since 4.1). Domoticz stores the value in its database, so protect that database and its backups.
+- **The log never contains the key or your location** (since 4.1), even with Debug on:
+  - The Debug dump of the hardware parameters and Domoticz settings shows a value only for an allow-list of harmless names (radius, location ID, Debug setting, Domoticz's own folder and version entries). Everything else, including the API key and your Domoticz location, is shown as `<masked>` (or `<empty>`), and names that are not on the list are masked by default.
+  - Request paths are logged without their query string, because the automatic lookup carries your coordinates there.
+  - The API key is scrubbed from logged response text and error messages.
+  - These guarantees are covered by tests in `tests.py`. The plugin does not control Domoticz's own log lines.
+- **Older versions leak.** Versions up to 4.0 write the key and your location to the Debug log, and your coordinates also to the normal log when the automatic lookup fails. **If you ever shared a log from such a version, rotate your key.**
 - **Where the key goes.** The key is sent only to `api.openaq.org`, in the `X-API-Key` header, over HTTPS.
-- **Nothing is written to disk.** The plugin keeps readings in memory and creates no state, cache or log files of its own. Domoticz itself stores the hardware configuration in its database.
+- **Nothing is written to disk.** The plugin keeps readings in memory and creates no state, cache or log files of its own.
+- **Your location** is sent to OpenAQ only in the automatic lookup request (rounded to four decimal places). With an OpenAQ Location ID entered, the plugin does not read your Domoticz location at all.
 - **Rotating a key.** If a key may have been exposed, rotate it on your OpenAQ account page (<https://explore.openaq.org/account>) and enter the new key in Domoticz.
-
-Both the clear-text field and the Debug output are tracked as planned fixes in [`ROADMAP.md`](ROADMAP.md).
 
 Protect the following as sensitive configuration or data:
 
 - The Domoticz hardware configuration, database and backups.
 - The plugin directory and host filesystem.
-- Logs and diagnostic exports, especially at Debug level.
+- Logs and diagnostic exports. Even though the plugin masks its own output, review a log before sharing it.
 - Your Domoticz location coordinates.
 
 ## Repository hygiene

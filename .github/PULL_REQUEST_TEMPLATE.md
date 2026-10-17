@@ -56,8 +56,8 @@
 
 - [ ] No API keys, access tokens, passwords, or other secrets are included.
 - [ ] No home coordinates or other personal data are included.
-- [ ] Logs, screenshots, and test data have been reviewed and redacted (Debug logs contain the API key and the Domoticz location).
-- [ ] The change does not log the API key or the Domoticz location.
+- [ ] Logs, screenshots, and test data have been reviewed and redacted.
+- [ ] The change does not log the API key or the Domoticz location, and `tests.py` still checks this for any new log output.
 
 ## Checklist
 

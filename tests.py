@@ -260,6 +260,16 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(fields["Mode2"].attrib["required"], "true")
         self.assertEqual(fields["Mode3"].attrib["required"], "false")
 
+    def test_only_the_api_key_field_is_masked(self):
+        fields = {p.attrib["field"]: p for p in self.root.find("params")}
+        self.assertEqual(fields["Mode2"].attrib.get("password"), "true")
+        for name in ("Mode1", "Mode3", "Mode6"):
+            self.assertNotIn("password", fields[name].attrib)
+
+    def test_radius_label_states_the_openaq_maximum(self):
+        fields = {p.attrib["field"]: p for p in self.root.find("params")}
+        self.assertIn("max 25", fields["Mode1"].attrib["label"])
+
 
 # ---------------------------------------------------------------------------
 # onStart
@@ -598,6 +608,471 @@ class BlockingGetTests(PluginTestCase):
 
 
 # ---------------------------------------------------------------------------
+# 4.1 helpers
+# ---------------------------------------------------------------------------
+SECRET = "SECRET-KEY-123"
+HOME_LAT, HOME_LON = "49.6116", "6.1319"
+NOT_SET = object()
+
+# The device definitions created by 4.0. Units 1-10 must stay exactly like this
+# so that existing devices and their history survive an upgrade.
+FROZEN_DEVICES = {
+    # unit: (Name, TypeName, Type, SubType, Options)
+    1: ("BC", "Custom", 0, 0, {"Custom": "0;µg/m³"}),
+    2: ("CO", "Custom", 0, 0, {"Custom": "0;µg/m³"}),
+    3: ("NO<sub>2</sub>", "Custom", 0, 0, {"Custom": "0;µg/m³"}),
+    4: ("O<sub>3</sub>", "Custom", 0, 0, {"Custom": "0;µg/m³"}),
+    5: ("PM<sub>10</sub>", "Custom", 0, 0, {"Custom": "0;µg/m³"}),
+    6: ("PM<sub>2.5</sub>", "Custom", 0, 0, {"Custom": "0;µg/m³"}),
+    7: ("SO<sub>2</sub>", "Custom", 0, 0, {"Custom": "0;µg/m³"}),
+    8: ("Info", "Text", 0, 0, {}),
+    9: ("Pollutants", None, 243, 22, {}),
+    10: ("Air Quality Index", "Custom", 0, 0, {"Custom": "0;"}),
+}
+
+
+class TrackingSettings(dict):
+    """Settings that count how often the plugin asks for the Domoticz location
+    with ``Settings.get("Location")`` (config_2_log iterates the dict to mask
+    it, which is deliberately not counted)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.location_reads = 0
+
+    def get(self, key, default=None):
+        if key == "Location":
+            self.location_reads += 1
+        return super().get(key, default)
+
+
+class RestartableTestCase(PluginTestCase):
+    def restart(self, params=None, settings=None, search=NOT_SET, location=NOT_SET):
+        """Throw all state away and start a brand-new plugin instance with the
+        given hardware parameters. Returns what onStart returned."""
+        for sink in (self.fake.debug_lines, self.fake.log_lines, self.fake.error_lines,
+                     self.fake.connections, self.fake.created_units, self.api_calls):
+            del sink[:]
+        self.devices.clear()
+        self.mod.Parameters = dict(self.PARAMS, **(params or {}))
+        self.mod.Settings = dict(self.SETTINGS, **(settings or {}))
+        self.search_response = (
+            {"results": [{"id": 9645, "name": "Test station"}]} if search is NOT_SET else search)
+        self.location_response = default_location() if location is NOT_SET else location
+        self.plugin = self.mod.BasePlugin()
+        return self.plugin.onStart()
+
+    def discovery_query(self):
+        return urllib.parse.parse_qs(urllib.parse.urlparse(self.api_calls[0]).query)
+
+
+class HttpsTestCase(PluginTestCase):
+    """Runs the plugin against a mocked ``http.client.HTTPSConnection`` so the
+    real startup helper, and everything it logs, is exercised."""
+
+    PATCH_BLOCKING_GET = False
+    PARAMS = dict(PluginTestCase.PARAMS, Mode2=SECRET, Mode3="", Mode6="Debug")
+    SETTINGS = {"Location": "%s;%s" % (HOME_LAT, HOME_LON), "Language": "en",
+                "WebPassword": "hunter2", "ProwlAPI": "prowl-secret"}
+
+    def setUp(self):
+        super().setUp()
+        self.https_requests = []
+        self.https_responder = self.default_https_responder
+        self.https_error = None
+        patcher = mock.patch("http.client.HTTPSConnection", side_effect=self._https_route)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def default_https_responder(self, path):
+        if path.startswith("/v3/locations?"):
+            return 200, json.dumps({"results": [{"id": 9645, "name": "Test station"}]}).encode()
+        return 200, json.dumps(default_location()).encode()
+
+    def _https_route(self, host, port, timeout=None, context=None):
+        conn = mock.MagicMock()
+        state = {}
+
+        def request(method, path, headers=None):
+            if self.https_error is not None:
+                raise self.https_error
+            state["path"] = path
+            self.https_requests.append((path, dict(headers or {})))
+
+        def getresponse():
+            status, body = self.https_responder(state["path"])
+            return types.SimpleNamespace(status=status, read=lambda: body)
+
+        conn.request.side_effect = request
+        conn.getresponse.side_effect = getresponse
+        return conn
+
+    def all_log_lines(self):
+        return self.fake.debug_lines + self.fake.log_lines + self.fake.error_lines
+
+
+# ---------------------------------------------------------------------------
+# 4.1: the API key and the Domoticz location never reach the log
+# ---------------------------------------------------------------------------
+class LogHygieneTests(HttpsTestCase):
+    NEEDLES = (SECRET, HOME_LAT, HOME_LON, "hunter2", "prowl-secret")
+
+    def assert_log_is_clean(self):
+        lines = self.all_log_lines()
+        self.assertGreater(len(lines), 2, "no log lines at all: the check would be vacuous")
+        for needle in self.NEEDLES:
+            self.assertEqual([l for l in lines if needle in l], [],
+                             "%r reached the log" % needle)
+
+    def test_automatic_lookup_and_a_poll_never_log_the_key_or_the_location(self):
+        self.assertIs(self.plugin.onStart(), True)
+        # the secrets really were in play
+        path, headers = self.https_requests[0]
+        self.assertIn("coordinates=%s%%2C%s" % (HOME_LAT, HOME_LON), path)
+        self.assertEqual(headers["X-API-Key"], SECRET)
+        self.deliver({"results": [reading(11, 40.0)]})
+        self.assert_log_is_clean()
+
+    def test_explicit_location_id_flow_is_clean(self):
+        self.mod.Parameters["Mode3"] = "9645"
+        self.assertIs(self.plugin.onStart(), True)
+        self.assertEqual([p for p, _ in self.https_requests], ["/v3/locations/9645"])
+        self.assert_log_is_clean()
+
+    def test_lookup_that_finds_nothing_is_clean(self):
+        self.https_responder = lambda path: (200, b'{"results": []}')
+        self.assertIs(self.plugin.onStart(), False)
+        self.assertTrue(any("No OpenAQ location found" in e for e in self.fake.error_lines))
+        self.assert_log_is_clean()
+
+    def test_http_error_that_echoes_the_key_is_scrubbed(self):
+        self.https_responder = lambda path: (
+            401, ('{"detail": "bad key %s"}' % SECRET).encode())
+        self.assertIs(self.plugin.onStart(), False)
+        self.assertTrue(any("<api-key>" in e for e in self.fake.error_lines))
+        self.assert_log_is_clean()
+
+    def test_network_error_that_mentions_the_key_is_scrubbed(self):
+        self.https_error = OSError("cannot reach host using key %s" % SECRET)
+        self.assertIs(self.plugin.onStart(), False)
+        self.assertTrue(any("failed" in e for e in self.fake.error_lines))
+        self.assert_log_is_clean()
+
+    def test_poll_response_that_echoes_the_key_is_scrubbed_in_the_debug_line(self):
+        self.assertIs(self.plugin.onStart(), True)
+        self.deliver({"results": [], "note": SECRET})
+        self.assert_log_is_clean()
+
+    def test_request_path_is_logged_without_its_query_string(self):
+        self.assertIs(self.plugin.onStart(), True)
+        self.assertIn("Blocking GET /v3/locations?<query hidden> -> HTTP 200",
+                      self.fake.debug_lines)
+        self.assertIn("Blocking GET /v3/locations/9645 -> HTTP 200", self.fake.debug_lines)
+
+    def test_config_dump_masks_everything_that_is_not_allow_listed(self):
+        self.mod.Parameters.update(
+            Username="", Password="pw-secret", Mode4="", Mode7="future-secret")
+        self.assertIs(self.plugin.onStart(), True)
+        dump = self.fake.debug_lines
+        for line in (
+            "Parameter 'Mode2'...: '<masked>'",
+            "Parameter 'Username'...: '<empty>'",
+            "Parameter 'Password'...: '<masked>'",
+            "Parameter 'Mode4'...: '<empty>'",
+            "Parameter 'Mode7'...: '<masked>'",
+            "Setting 'Location'...: '<masked>'",
+            "Setting 'WebPassword'...: '<masked>'",
+            "Setting 'ProwlAPI'...: '<masked>'",
+            # harmless values stay visible, so Debug output is still useful
+            "Parameter 'Mode1'...: '10'",
+            "Parameter 'Mode3'...: ''",
+            "Parameter 'Mode6'...: 'Debug'",
+            "Setting 'Language'...: 'en'",
+        ):
+            self.assertIn(line, dump)
+        for needle in ("pw-secret", "future-secret"):
+            self.assertEqual([l for l in self.all_log_lines() if needle in l], [])
+
+
+class MaskValueTests(PluginTestCase):
+    def test_allow_listed_names_are_shown(self):
+        loggable = self.mod.LOGGABLE_PARAMETERS
+        self.assertEqual(self.mod.mask_value("Mode1", "10", loggable), "10")
+        self.assertEqual(self.mod.mask_value("Mode3", "", loggable), "")
+
+    def test_other_names_are_masked_or_marked_empty(self):
+        loggable = self.mod.LOGGABLE_PARAMETERS
+        for value, expected in (("abc", "<masked>"), (0, "<masked>"),
+                                ("", "<empty>"), (None, "<empty>")):
+            with self.subTest(value=value):
+                self.assertEqual(self.mod.mask_value("Anything", value, loggable), expected)
+
+    def test_secret_names_are_not_allow_listed(self):
+        for name in ("Mode2", "Mode4", "Mode5", "Username", "Password",
+                     "Address", "Port", "SerialPort"):
+            self.assertNotIn(name, self.mod.LOGGABLE_PARAMETERS)
+        self.assertNotIn("Location", self.mod.LOGGABLE_SETTINGS)
+
+
+# ---------------------------------------------------------------------------
+# 4.1: a failed start leaves the plugin idle
+# ---------------------------------------------------------------------------
+class FailedStartTests(RestartableTestCase):
+    CASES = (
+        ("missing API key", dict(params={"Mode2": ""})),
+        ("blank API key", dict(params={"Mode2": "   "})),
+        ("non-numeric location ID", dict(params={"Mode3": "abc"})),
+        ("zero location ID", dict(params={"Mode3": "0"})),
+        ("negative location ID", dict(params={"Mode3": "-5"})),
+        ("no location found", dict(params={"Mode3": ""}, search={"results": []})),
+        ("discovery request failed", dict(params={"Mode3": ""}, search=None)),
+        ("discovered location without an ID",
+         dict(params={"Mode3": ""}, search={"results": [{"name": "x"}]})),
+        ("sensor lookup failed", dict(location=None)),
+        ("no usable sensors", dict(location=location())),
+        ("Domoticz location not set",
+         dict(params={"Mode3": ""}, settings={"Location": ""})),
+        ("Domoticz location invalid",
+         dict(params={"Mode3": ""}, settings={"Location": "abc;def"})),
+    )
+
+    def test_every_failure_leaves_the_plugin_idle(self):
+        for label, kwargs in self.CASES:
+            with self.subTest(case=label):
+                self.assertIs(self.restart(**kwargs), False)
+                summary = [e for e in self.fake.error_lines if "OpenAQ plugin not started" in e]
+                self.assertEqual(len(summary), 1)
+                self.assertEqual(self.fake.connections, [])
+                self.assertEqual(self.devices, {})
+                conn = FakeConnection(Name="openaq")
+                payload = {"Status": "200",
+                           "Data": json.dumps({"results": [reading(11, 40.0)]}).encode()}
+                # none of these may raise after a failed start
+                self.plugin.onHeartbeat()
+                self.plugin.onConnect(conn, 0, "")
+                self.plugin.onMessage(conn, payload)
+                self.plugin.onStop()
+                self.assertEqual(conn.sent, [])
+                self.assertEqual(self.devices, {})
+                self.assertEqual(self.fake.connections, [])
+
+    def test_a_plugin_that_never_started_can_be_stopped_and_heartbeated(self):
+        plugin = self.mod.BasePlugin()
+        plugin.onHeartbeat()
+        plugin.onStop()
+        self.assertEqual(self.fake.error_lines, [])
+
+    def test_start_can_be_retried_on_the_same_instance_after_a_failure(self):
+        self.assertIs(self.restart(location=None), False)
+        self.location_response = default_location()
+        self.assertIs(self.plugin.onStart(), True)
+        conn = self.fake.connections[0]
+        conn._connected = True
+        self.plugin.onHeartbeat()
+        self.assertEqual(len(conn.sent), 1)
+
+    def test_a_failed_restart_without_onstop_leaves_the_plugin_idle(self):
+        # Domoticz calls onStop before it restarts a plugin, but a failed
+        # onStart must not depend on that: a stale "started" state would let
+        # the heartbeat poll with the previous settings.
+        self.assertIs(self.restart(), True)
+        conn = self.fake.connections[0]
+        conn._connected = True
+        self.plugin.onHeartbeat()
+        self.assertEqual(len(conn.sent), 1)
+        self.mod.Parameters = dict(self.PARAMS, Mode2="")
+        self.assertIs(self.plugin.onStart(), False)
+        self.plugin.onHeartbeat()
+        self.plugin.onConnect(conn, 0, "")
+        self.deliver({"results": [reading(11, 40.0)]})
+        self.assertEqual(len(conn.sent), 1)
+
+    def test_a_stopped_plugin_ignores_further_callbacks(self):
+        self.assertIs(self.restart(), True)
+        conn = self.fake.connections[0]
+        conn._connected = True
+        self.plugin.onStop()
+        self.plugin.onHeartbeat()
+        self.plugin.onConnect(conn, 0, "")
+        self.deliver({"results": [reading(11, 40.0)]})
+        self.assertEqual(conn.sent, [])
+        self.assertEqual(self.devices[UNIT_PM25].update_count, 0)
+
+
+# ---------------------------------------------------------------------------
+# 4.1: the Domoticz location is only read for the automatic lookup
+# ---------------------------------------------------------------------------
+class LazyLocationTests(RestartableTestCase):
+    def test_explicit_id_never_reads_the_domoticz_location(self):
+        self.mod.Settings = TrackingSettings(self.SETTINGS)
+        self.start_default()
+        self.assertEqual(self.mod.Settings.location_reads, 0)
+        self.assertEqual(self.api_calls, ["/v3/locations/9645"])
+
+    def test_blank_id_reads_the_domoticz_location(self):
+        self.mod.Settings = TrackingSettings(self.SETTINGS)
+        self.mod.Parameters["Mode3"] = ""
+        self.start_default()
+        self.assertGreaterEqual(self.mod.Settings.location_reads, 1)
+
+    def test_explicit_id_starts_without_a_usable_domoticz_location(self):
+        for label, settings in (("empty", {"Location": ""}), ("separator only", {"Location": ";"}),
+                                ("garbage", {"Location": "abc"}), ("key missing", {})):
+            with self.subTest(location=label):
+                self.assertIs(self.restart(settings=settings, params={"Mode3": "9645"}), True)
+                self.assertEqual(self.api_calls, ["/v3/locations/9645"])
+
+    def test_invalid_domoticz_location_stops_the_automatic_lookup(self):
+        for raw in ("", "abc;def", "49.61", "49.61;6.13;1", ";", "91;6", "49;181", "nan;6", "49;inf"):
+            with self.subTest(location=raw):
+                self.assertIs(self.restart(params={"Mode3": ""}, settings={"Location": raw}), False)
+                self.assertEqual(self.api_calls, [])
+                errors = self.fake.error_lines
+                self.assertTrue(any("The Domoticz location is not set or not valid" in e for e in errors))
+                if raw:
+                    self.assertEqual([e for e in errors if raw in e], [], "raw value was echoed")
+
+    def test_valid_coordinates_are_sent_rounded_to_four_decimals(self):
+        for raw, expected in (
+            ("49.61;6.13", "49.61,6.13"),
+            (" 49.61 ; 6.13 ", "49.61,6.13"),
+            ("49.611234;6.129876", "49.6112,6.1299"),
+            ("-33.8688;151.2093", "-33.8688,151.2093"),
+            ("90;180", "90.0,180.0"),
+        ):
+            with self.subTest(location=raw):
+                self.assertIs(self.restart(params={"Mode3": ""}, settings={"Location": raw}), True)
+                self.assertEqual(self.discovery_query()["coordinates"], [expected])
+
+
+# ---------------------------------------------------------------------------
+# 4.1: radius validation
+# ---------------------------------------------------------------------------
+class RadiusTests(RestartableTestCase):
+    CASES = (
+        # raw field value, metres sent to OpenAQ, fragment of the expected log line
+        ("10", 10000, None),
+        ("25", 25000, None),
+        ("3", 3000, None),
+        (" 7 ", 7000, None),
+        ("2.5", 2500, None),
+        ("2,5", 2500, None),
+        ("0.0004", 1, None),
+        ("40", 25000, "above the OpenAQ maximum of 25 km; using 25 km"),
+        ("25.1", 25000, "above the OpenAQ maximum"),
+        ("1e3", 25000, "above the OpenAQ maximum"),
+        ("abc", 10000, "is not a positive number; using the default of 10 km"),
+        ("0", 10000, "is not a positive number"),
+        ("-5", 10000, "is not a positive number"),
+        ("nan", 10000, "is not a positive number"),
+        ("inf", 10000, "is not a positive number"),
+        ("", 10000, "Radius is empty; using the default of 10 km"),
+    )
+
+    def test_radius_is_validated_and_the_value_used_is_logged(self):
+        for raw, metres, fragment in self.CASES:
+            with self.subTest(radius=raw):
+                self.assertIs(self.restart(params={"Mode1": raw, "Mode3": ""}), True)
+                self.assertEqual(self.discovery_query()["radius"], [str(metres)])
+                logs = self.fake.log_lines
+                if fragment is None:
+                    self.assertEqual([l for l in logs if l.startswith("Radius")], [])
+                else:
+                    self.assertTrue(any(fragment in l for l in logs), logs)
+                used = "{:g}".format(metres / 1000.0)
+                self.assertIn(
+                    "Looking for an OpenAQ location within %s km of the Domoticz location" % used,
+                    logs)
+
+    def test_radius_is_ignored_when_a_location_id_is_entered(self):
+        self.assertIs(self.restart(params={"Mode1": "abc", "Mode3": "9645"}), True)
+        self.assertEqual(self.api_calls, ["/v3/locations/9645"])
+        self.assertEqual([l for l in self.fake.log_lines if "adius" in l], [])
+
+
+# ---------------------------------------------------------------------------
+# 4.1: other configuration handling and wording
+# ---------------------------------------------------------------------------
+class ConfigurationTests(RestartableTestCase):
+    def test_start_reports_success(self):
+        self.assertIs(self.plugin.onStart(), True)
+
+    def test_api_key_whitespace_is_trimmed(self):
+        self.mod.Parameters["Mode2"] = "  TEST-API-KEY \n"
+        self.start_default()
+        conn = self.fake.connections[0]
+        self.plugin.onConnect(conn, 0, "")
+        self.assertEqual(conn.sent[0]["Headers"]["X-API-Key"], "TEST-API-KEY")
+
+    def test_location_id_whitespace_is_trimmed(self):
+        self.assertIs(self.restart(params={"Mode3": " 9645 "}), True)
+        self.assertEqual(self.api_calls, ["/v3/locations/9645"])
+
+    def test_zero_and_negative_location_ids_are_rejected_clearly(self):
+        for raw in ("0", "-5"):
+            with self.subTest(location_id=raw):
+                self.assertIs(self.restart(params={"Mode3": raw}), False)
+                self.assertTrue(any("must be a positive number" in e for e in self.fake.error_lines))
+                self.assertEqual(self.api_calls, [])
+
+
+class AutoDetectWordingTests(RestartableTestCase):
+    def test_message_does_not_claim_the_location_is_the_nearest(self):
+        self.assertIs(self.restart(params={"Mode3": ""}), True)
+        lines = self.fake.log_lines
+        selected = [l for l in lines if l.startswith("Auto-selected OpenAQ location")]
+        self.assertEqual(len(selected), 1)
+        self.assertIn("'Test station' (id 9645)", selected[0])
+        self.assertIn("first location OpenAQ returned within 10 km", selected[0])
+        self.assertIn("not necessarily the nearest", selected[0])
+        self.assertEqual([l for l in lines if "Auto-selected nearest" in l], [])
+
+    def test_message_tells_the_user_which_id_to_enter(self):
+        self.assertIs(self.restart(params={"Mode3": ""}), True)
+        self.assertTrue(any(
+            "enter 9645 in the 'OpenAQ Location ID' hardware field" in l
+            for l in self.fake.log_lines))
+
+    def test_nothing_is_announced_when_the_id_was_entered(self):
+        self.assertIs(self.restart(), True)
+        self.assertEqual([l for l in self.fake.log_lines if "Auto-selected" in l], [])
+
+
+# ---------------------------------------------------------------------------
+# 4.1: devices 1-10 are unchanged, so an upgrade keeps devices and history
+# ---------------------------------------------------------------------------
+class UpgradeCompatibilityTests(PluginTestCase):
+    def test_units_one_to_ten_are_exactly_the_4_0_definitions(self):
+        self.start_default()
+        self.assertEqual(sorted(self.devices), list(range(1, 11)))
+        image = self.fake.images["xfr_openaq2"].ID
+        for unit, expected in FROZEN_DEVICES.items():
+            dev = self.devices[unit]
+            self.assertEqual((dev.Name, dev.TypeName, dev.Type, dev.SubType, dev.Options),
+                             expected, "unit %d changed" % unit)
+            self.assertEqual(dev.Used, 1)
+            self.assertEqual(dev.Image, None if unit in (8, 9) else image)
+
+    def test_devices_created_by_4_0_are_reused_and_keep_their_identity(self):
+        self.fake.images["xfr_openaq2"] = types.SimpleNamespace(ID=7)
+        existing = {}
+        for unit, (name, type_name, dev_type, sub_type, options) in FROZEN_DEVICES.items():
+            dev = FakeDevice(self.fake, Unit=unit, Name=name, TypeName=type_name, Type=dev_type,
+                             Subtype=sub_type, Options=options, Used=1)
+            self.devices[unit] = dev
+            existing[unit] = dev
+        self.start_default()
+        self.assertEqual(self.fake.created_units, [])
+        self.deliver({"results": [reading(11, 40.0), reading(12, 20.0)]})
+        for unit, dev in existing.items():
+            self.assertIs(self.devices[unit], dev)
+            self.assertEqual(dev.Name, FROZEN_DEVICES[unit][0])
+        self.assertEqual(self.devices[UNIT_PM25].sValue, "40.0")
+        self.assertEqual(self.devices[UNIT_PM10].sValue, "20.0")
+        self.assertGreater(self.devices[UNIT_AQI].update_count, 0)
+
+
+# ---------------------------------------------------------------------------
 # Repository standards (documentation and hygiene)
 # ---------------------------------------------------------------------------
 def read(relative_path):
@@ -662,6 +1137,58 @@ class RepositoryStandardsTests(unittest.TestCase):
             self.assertTrue(text.startswith("name:"), name)
             self.assertIn("\nbody:\n", text, name)
         self.assertIn("blank_issues_enabled: false", read(".github/ISSUE_TEMPLATE/config.yml"))
+
+    def test_hardware_labels_in_the_docs_match_the_manifest(self):
+        block = re.search(r"<plugin\b.*?</plugin>", read("plugin.py"), re.S).group(0)
+        labels = [p.attrib["label"] for p in ET.fromstring(block).find("params")]
+        self.assertEqual(len(labels), 4)
+        for doc in ("README.md", "DEPLOY.md"):
+            text = read(doc)
+            for label in labels:
+                self.assertIn("| %s |" % label, text, "%s does not document %r" % (doc, label))
+
+
+class DocumentedMessageTests(unittest.TestCase):
+    """Every log message quoted in the troubleshooting tables must still exist
+    in plugin.py, so the documentation cannot drift away from the code."""
+
+    NUL = "\x00"
+
+    @classmethod
+    def normalise(cls, text):
+        text = re.sub(r"\{[^}]*\}", cls.NUL, text)         # str.format fields in the code
+        text = re.sub(r"<[^>]*>", cls.NUL, text)           # <placeholders> in the docs
+        return re.sub(r"\d+(?:\.\d+)?", cls.NUL, text)     # numbers (limits, HTTP codes)
+
+    @classmethod
+    def plugin_strings(cls):
+        tree = ast.parse(read("plugin.py"))
+        return [cls.normalise(node.value) for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+
+    @staticmethod
+    def documented_messages():
+        found = []
+        for name in ("README.md", "DEPLOY.md"):
+            for line in read(name).splitlines():
+                match = re.match(r"^\|\s*`([^`]+)`", line)  # first quoted text of the first cell
+                if match:
+                    found.append((name, match.group(1)))
+        return found
+
+    def test_documented_log_messages_exist_in_the_plugin(self):
+        strings = self.plugin_strings()
+        messages = self.documented_messages()
+        self.assertGreaterEqual(len(messages), 10)
+        missing = []
+        for doc, message in messages:
+            # Domoticz prefixes the connection name ("openaq") to these messages
+            text = re.sub(r"^openaq (?=returned)", "<connection> ", message)
+            text = self.normalise(text.replace("...", "<more>"))
+            pieces = [p.strip() for p in text.split(self.NUL) if len(p.strip()) >= 5]
+            if not pieces or not any(all(p in s for p in pieces) for s in strings):
+                missing.append((doc, message))
+        self.assertEqual(missing, [])
 
 
 if __name__ == "__main__":

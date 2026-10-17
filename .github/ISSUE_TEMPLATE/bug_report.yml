@@ -11,7 +11,7 @@ body:
 
         Please search existing issues first, and check `ROADMAP.md` for known defects.
 
-        **Never include your OpenAQ API key, your home coordinates, or other unredacted personal data.** With Debug enabled the plugin writes the API key (the `Parameter 'Mode2'` line) and the Domoticz location (the `Setting 'Location'` line) to the log. Remove those values before posting a log.
+        **Never include your OpenAQ API key, your home coordinates, or other unredacted personal data.** Versions up to 4.0 write the API key (the `Parameter 'Mode2'` line) and the Domoticz location (the `Setting 'Location'` line) to the Debug log, and your coordinates also to the normal log when the automatic lookup fails: remove those values before posting a log. From 4.1 they are masked, but please still review a log before posting it.
 
   - type: input
     id: plugin_version

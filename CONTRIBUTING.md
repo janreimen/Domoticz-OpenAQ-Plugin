@@ -32,7 +32,7 @@ Include the following information whenever relevant:
 
 Please report whether the issue occurs consistently or intermittently.
 
-**Redact your logs before posting them.** With Debug enabled, the plugin writes all hardware parameters to the log, including your OpenAQ API key (the line starting `Parameter 'Mode2'`), and all Domoticz settings, including your location coordinates. Do not attach unredacted logs containing API keys, passwords, or your home coordinates.
+**Review your logs before posting them.** Since 4.1 the plugin masks the OpenAQ API key and your location in its own log output (`Parameter 'Mode2'...: '<masked>'`), but versions up to 4.0 write both to the Debug log, and your coordinates also to the normal log when the automatic lookup fails. If you use an older version, redact those lines. Do not attach logs containing API keys, passwords, or your home coordinates.
 
 ## 3. Suggesting Features
 
@@ -103,7 +103,8 @@ Replace the example branch names and commit message with ones that describe your
 - Use only the Python standard library. Avoid introducing new dependencies unless they are justified and documented.
 - Handle API errors, timeouts, and unexpected responses safely.
 - Respect OpenAQ's rate limits (60 requests per minute and 2,000 per hour on the free tier) and keep the recurring poll to a single request per interval.
-- Do not log the API key or other credentials, and do not log your home coordinates, at any log level.
+- Do not log the API key or other credentials, and do not log the Domoticz location or any request path that contains it, at any log level. New log output goes through the existing masking (`mask_value`, the path and key scrubbing); `tests.py` fails if the key or the location reaches any log line, so add a test for new log output that touches request data.
+- Log messages quoted in `README.md` and `DEPLOY.md` must exist in `plugin.py`; a test checks this, so update the docs when you change a message.
 - Preserve the existing Domoticz device unit numbers (1–10) and their meaning, so existing devices and their history survive an upgrade.
 - Ensure that a failure in one operation does not disrupt unrelated devices or the rest of the plugin.
 

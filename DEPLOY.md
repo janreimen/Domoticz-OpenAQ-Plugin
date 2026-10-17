@@ -97,11 +97,11 @@ A successful command produces no output.
 
 ---
 
-## 4. Set your location in Domoticz
+## 4. Set your location in Domoticz (only for the automatic lookup)
 
-Open **Setup → Settings → System → Location** and make sure your latitude and longitude are set.
+Open **Setup → Settings → System → Location** and make sure your latitude and longitude are set, if you want the plugin to find a location for you (section 5).
 
-The plugin reads these coordinates at startup. They are used for the automatic location lookup (section 5), but a start with an empty location currently fails even if you enter a Location ID. See `ROADMAP.md`.
+The plugin reads these coordinates only for the automatic location lookup. If you enter an OpenAQ Location ID, the Domoticz location is not read and may stay empty. Your coordinates are sent to OpenAQ only in that one lookup request, and are never written to the Domoticz log.
 
 ---
 
@@ -112,15 +112,17 @@ Check <https://explore.openaq.org> to see which locations exist near you, and wh
 You have two options:
 
 * **Enter a Location ID** (recommended). The plugin reads exactly that location, for example `9645` (Beidweiler, LU).
-* **Leave the field blank.** The plugin asks OpenAQ for one location within the radius of your Domoticz coordinates, once at startup, and logs it:
+* **Leave the field blank.** The plugin asks OpenAQ for one location within the radius of your Domoticz coordinates, once at startup, and logs what it did:
 
 ```text
-Auto-selected nearest OpenAQ location: <name> (id <id>)
+Looking for an OpenAQ location within 10 km of the Domoticz location
+Auto-selected OpenAQ location '<name>' (id <id>): the first location OpenAQ returned within 10 km, which is not necessarily the nearest one.
+To keep using this location, enter <id> in the 'OpenAQ Location ID' hardware field.
 ```
 
 OpenAQ's API documentation does not state that results are ordered by distance, so the automatic choice is not guaranteed to be the closest location. After the first start, copy the logged ID into the **OpenAQ Location ID** field to make the choice permanent.
 
-The radius is in kilometres, defaults to `10`, and is only used for the automatic lookup. OpenAQ documents a maximum of 25 km.
+The radius is in kilometres, defaults to `10`, and is only used for the automatic lookup. Decimals are accepted (`2.5` or `2,5`). OpenAQ documents a maximum of 25 km: a larger value is reduced to 25, and an empty, non-numeric or non-positive value uses `10`. The log always states the radius that was used.
 
 ---
 
@@ -140,14 +142,14 @@ OpenAQ 4
 
 | Field | Value |
 |---|---|
-| Radius (km, used only if Location ID is blank) | `10`, or up to `25` |
-| OpenAQ API-KEY | Your OpenAQ API key |
-| OpenAQ Location ID (blank = auto-detect nearest) | A numeric location ID, or blank |
+| Radius (km, max 25, used only if Location ID is blank) | `10`, or up to `25` |
+| OpenAQ API-KEY | Your OpenAQ API key (the field is masked) |
+| OpenAQ Location ID (blank = auto-detect) | A numeric location ID, or blank |
 | Debug | `False` for normal use |
 
 **Do not put the API key into `plugin.py`.** Enter it only in the Domoticz hardware form.
 
-Keep **Debug** set to `False` unless you are diagnosing a problem. With Debug on, the plugin writes your API key and your Domoticz location to the log (see section 11).
+Keep **Debug** set to `False` unless you are diagnosing a problem. Debug output is verbose. The API key and your Domoticz location are masked in it (see section 11).
 
 Click **Add**.
 
@@ -183,7 +185,9 @@ After restarting Domoticz:
 3. Check the **Info** device. It should read `OpenAQ Location ID: <id>` and `Sensors reporting: <n>/<m>`.
 4. Check the Domoticz log for plugin errors.
 
-At the normal log level a successful start is quiet; the only message the plugin itself writes is the auto-selection line described in section 5. The devices are created at startup and receive their values after the first successful poll.
+At the normal log level a successful start is quiet. With a blank Location ID the plugin writes the lookup and auto-selection lines described in section 5; with a Location ID it writes nothing. The devices are created at startup and receive their values after the first successful poll.
+
+If the start fails, the log ends with `OpenAQ plugin not started`, preceded by the reason, and the plugin stays idle until you restart or update the hardware (see section 12).
 
 A pollutant device only receives a value if the location reports that pollutant. Devices for pollutants your location does not measure stay empty. This is normal.
 
@@ -216,7 +220,7 @@ git checkout <VERSION>
 For example:
 
 ```bash
-git checkout v4.0
+git checkout v4.1
 ```
 
 Restart Domoticz:
@@ -224,6 +228,12 @@ Restart Domoticz:
 ```bash
 sudo systemctl restart domoticz
 ```
+
+### Upgrading from 4.0
+
+No other action is needed. The devices keep their unit numbers and history, and the hardware instance keeps its settings. The only visible change is that the **OpenAQ API-KEY** field is now masked.
+
+If you ever shared a Debug log written by 4.0 or earlier, rotate your API key (see section 11).
 
 ### Updating to the latest repository state
 
@@ -280,20 +290,25 @@ Then verify the Domoticz log.
 
 When diagnosing problems, collect the relevant Domoticz log entries.
 
-**With Debug enabled, the plugin writes your OpenAQ API key and your Domoticz location to the log.** Look for these lines and replace the values before sharing the log:
+**Since 4.1 the plugin never writes your OpenAQ API key or your Domoticz location to the log, even with Debug enabled.** The Debug dump of the hardware parameters and Domoticz settings looks like this:
 
 ```text
-Parameter 'Mode2'...: '<REDACTED>'
-Setting 'Location'...: '<REDACTED>'
+Parameter 'Mode1'...: '10'
+Parameter 'Mode2'...: '<masked>'
+Setting 'Location'...: '<masked>'
 ```
 
-`Mode2` is the API key. Also avoid posting:
+Only an allow-list of harmless values (radius, location ID, Debug setting, Domoticz's own folders and version) is shown; everything else is `<masked>`, or `<empty>` when blank. Request paths are logged without their query string, and the key is scrubbed from any logged response or error text.
+
+Still review a log before sharing it, because it contains other information about your system, and Domoticz writes its own lines which the plugin cannot control. Also avoid posting:
 
 * Your API key
 * Your Domoticz location coordinates
 * Any other credentials or personal data
 
-Turn Debug off again when you are done. If the key may have been exposed, rotate it on your OpenAQ account page and enter the new key in the Domoticz hardware form.
+**Older versions leak.** Versions up to 4.0 write the key and your location to the Debug log (and your coordinates to the normal log when the automatic lookup fails). If you ever shared a log from such a version, rotate the key on your OpenAQ account page (<https://explore.openaq.org/account>) and enter the new key in the Domoticz hardware form.
+
+Turn Debug off again when you are done.
 
 ---
 
@@ -311,7 +326,19 @@ Restart Domoticz after correcting the installation, and run the syntax check fro
 
 ### Python error during startup
 
-Look in the Domoticz log for messages containing `OpenAQ`, `Traceback`, `ImportError`, `SyntaxError` or `IndexError`.
+Look in the Domoticz log for messages containing `OpenAQ`, `Traceback`, `ImportError` or `SyntaxError`.
+
+### The plugin did not start
+
+Every failed start ends with this line, preceded by the specific reason (see the table below):
+
+```text
+OpenAQ plugin not started - see the message above. It stays idle until the hardware is restarted or updated.
+```
+
+The plugin then ignores heartbeats and creates no devices or connections. Fix the cause, then restart or update the hardware under **Setup → Hardware**.
+
+The startup lookups are not retried automatically. If the cause was temporary (for example Domoticz started before the network was up), restarting the hardware is enough.
 
 ### Log messages
 
@@ -319,23 +346,27 @@ Look in the Domoticz log for messages containing `OpenAQ`, `Traceback`, `ImportE
 |---|---|
 | `Unable to read openaq API-KEY from settings` | The API key field is empty. Enter your key. |
 | `OpenAQ Location ID must be numeric, got '<value>'` | Enter digits only, or leave the field blank. |
-| `No OpenAQ location found within <n> m of <lat>,<lon>` | Nothing was found within the radius, or the lookup failed (check the error just before it). Increase the radius (up to 25 km) or enter a Location ID. |
-| `OpenAQ request <path> returned HTTP <status>: ...` | OpenAQ rejected a startup request. Check that the API key is valid and, for the automatic lookup, that the radius is 25 km or less. |
+| `OpenAQ Location ID must be a positive number, got '<value>'` | Zero and negative IDs do not exist. Enter a real location ID, or leave the field blank. |
+| `The Domoticz location is not set or not valid` | Only raised for the automatic lookup. Set **Setup → Settings → System → Location**, or enter a Location ID. See section 4. |
+| `Radius '<value>' is not a positive number; using the default of 10 km` | Informational. The radius field is not a positive number, so the default is used. |
+| `Radius is empty; using the default of 10 km` | Informational. |
+| `Radius <value> km is above the OpenAQ maximum of 25 km; using 25 km` | Informational. OpenAQ accepts at most 25 km. |
+| `No OpenAQ location found within <n> km of the Domoticz location` | Nothing was found within the radius, or the lookup failed (check the error just before it). Increase the radius (up to 25 km) or enter a Location ID. |
+| `OpenAQ returned a location without an ID` | OpenAQ's answer was unusable. Enter a Location ID. |
+| `OpenAQ request <path> returned HTTP <status>: ...` | OpenAQ rejected a startup request. Check that the API key is valid and that the Location ID exists. The logged path never contains your coordinates. |
 | `OpenAQ request <path> failed: <error>` | Network, DNS, TLS or timeout problem between Domoticz and `api.openaq.org`. Check connectivity from the Domoticz host. |
 | `Could not fetch sensor list for OpenAQ location <id>` | The location lookup failed. Check the ID and look for an earlier error. |
 | `Location <id> returned no usable sensors` | The location has no sensors the plugin can use. Choose another location. |
+| `OpenAQ plugin not started` | Always follows one of the errors above. See "The plugin did not start". |
 | `openaq returned HTTP 410 Gone ...` | OpenAQ retired an API path that this version uses. Update the plugin. |
-| `openaq returned a status: 401` or `403` | Normally means the API key is missing, invalid or revoked. Check it on your OpenAQ account page. |
-| `openaq returned a status: 429` | OpenAQ rate limit reached. Wait for the next period; avoid restarting the plugin repeatedly. |
-| `IndexError: list index out of range` at startup | The Domoticz location is not set. See section 4. |
-| `AttributeError: 'NoneType' object has no attribute 'Connecting'` on every heartbeat | A consequence of an earlier startup failure. Find and fix the first error in the log; this is a known defect (see `ROADMAP.md`). |
+| `openaq returned a status: <status>` | OpenAQ answered the hourly poll with an error. 401 or 403 normally mean the API key is missing, invalid or revoked: check it on your OpenAQ account page. 429 means the rate limit was reached: wait for the next period, and avoid restarting the plugin repeatedly. |
 
 ### Devices exist but show no values
 
 1. Open the **Info** device. `Sensors reporting: 0/<m>` means OpenAQ returned no usable readings for the tracked pollutants.
 2. Remember that readings of zero or below are ignored, and that sensors for other parameters are not shown.
 3. Check on <https://explore.openaq.org> that the location currently reports the pollutants you expect.
-4. Enable Debug briefly (and redact the log before sharing it, see section 11).
+4. Enable Debug briefly (and review the log before sharing it, see section 11).
 
 ### Air quality level looks wrong
 
@@ -383,7 +414,7 @@ The exact container path depends on the Domoticz Docker image and your volume co
 Before considering a deployment complete:
 
 * [ ] Domoticz is running correctly.
-* [ ] The Domoticz location is set.
+* [ ] The Domoticz location is set (only needed if the Location ID is left blank).
 * [ ] `plugin.py` and `xfr_openaq2.zip` are in the correct `plugins` directory.
 * [ ] File permissions allow Domoticz to read the plugin.
 * [ ] The **OpenAQ 4** hardware instance exists and is enabled.

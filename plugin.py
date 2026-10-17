@@ -6,6 +6,25 @@
 # Author: Xorfor
 # Maintainer: Waltervl, janreimen
 #
+# v4.1 - Robustness and secret handling. Device units 1-10 are unchanged, so
+#        existing devices and their history are kept when upgrading.
+#
+#        * The API-key field is masked in the Domoticz hardware form.
+#        * The API key and the Domoticz location are never written to the
+#          log: config_2_log() shows values only for an allow-list of harmless
+#          names, request paths are logged without their query string (the
+#          automatic lookup carries your coordinates there), and the key is
+#          scrubbed from any logged response text or error.
+#        * After a failed start the plugin stays idle: onConnect, onMessage
+#          and onHeartbeat do nothing unless onStart completed.
+#        * The Domoticz location is only read, and only has to be valid, for
+#          the automatic location lookup.
+#        * The radius is validated (decimals and a decimal comma are accepted,
+#          the maximum is the 25 km OpenAQ documents) and the value used is
+#          logged.
+#        * The auto-detect log message no longer claims the location is the
+#          nearest one, and tells you which ID to enter to keep it.
+#
 # v4.0 - Migrated to OpenAQ API v3.
 #        OpenAQ retired the v1/v2 endpoints on 2025-01-31; they now return
 #        HTTP 410 Gone. The v3 "/latest" endpoint returns one row per sensor
@@ -16,18 +35,18 @@
 #        The plugin now targets a single OpenAQ Location ID rather than
 #        scanning every location inside a radius on every poll. If you leave
 #        the Location ID field blank, the plugin does a best-effort lookup
-#        of the nearest location once at startup, using your Domoticz
+#        of a location near you once at startup, using your Domoticz
 #        Settings coordinates and the configured radius.
 #
 # Air Quality Index based on:
 #   http://www.airqualitynow.eu/about_indices_definition.php
 
 """
-<plugin key="xfr_openaq4" name="OpenAQ 4" author="Xorfor, Waltervl, janreimen" version="4.0" wikilink="https://github.com/janreimen/Domoticz-OpenAQ-Plugin" externallink="https://openaq.org/">
+<plugin key="xfr_openaq4" name="OpenAQ 4" author="Xorfor, Waltervl, janreimen" version="4.1" wikilink="https://github.com/janreimen/Domoticz-OpenAQ-Plugin" externallink="https://openaq.org/">
     <params>
-        <param field="Mode1" label="Radius (km, used only if Location ID is blank)" width="75px" default="10" required="false"/>
-        <param field="Mode2" label="OpenAQ API-KEY" width="200px" default="" required="true"/>
-        <param field="Mode3" label="OpenAQ Location ID (blank = auto-detect nearest)" width="100px" default="" required="false"/>
+        <param field="Mode1" label="Radius (km, max 25, used only if Location ID is blank)" width="75px" default="10" required="false"/>
+        <param field="Mode2" label="OpenAQ API-KEY" width="200px" default="" required="true" password="true"/>
+        <param field="Mode3" label="OpenAQ Location ID (blank = auto-detect)" width="100px" default="" required="false"/>
         <param field="Mode6" label="Debug" width="75px">
             <options>
                 <option label="True" value="Debug"/>
@@ -39,11 +58,46 @@
 """
 import Domoticz
 import json
+import math
 import ssl
 import http.client
 import urllib.parse
 from datetime import datetime
 import time
+
+# Radius of the automatic location lookup. OpenAQ documents a maximum of
+# 25,000 m for the "radius" parameter of GET /v3/locations.
+DEFAULT_RADIUS_KM = 10
+MAX_RADIUS_KM = 25
+
+# config_2_log() prints a value only for the names listed here; every other
+# value (the API key, credentials, the Domoticz location, anything Domoticz
+# adds in the future) is replaced by MASKED, or EMPTY when it is blank.
+MASKED = "<masked>"
+EMPTY = "<empty>"
+LOGGABLE_PARAMETERS = frozenset(
+    [
+        "HardwareID",
+        "HardwareName",
+        "Name",
+        "Key",
+        "Author",
+        "Version",
+        "Language",
+        "HomeFolder",
+        "StartupFolder",
+        "UserDataFolder",
+        "Database",
+        "WebRoot",
+        "DomoticzVersion",
+        "DomoticzHash",
+        "DomoticzBuildTime",
+        "Mode1",  # radius
+        "Mode3",  # location ID
+        "Mode6",  # debug
+    ]
+)
+LOGGABLE_SETTINGS = frozenset(["Language"])
 
 
 class BasePlugin:
@@ -68,13 +122,37 @@ class BasePlugin:
     }
 
     def __init__(self):
-        self.__runAgain = 0
         self.__radius = 0
+        self.__API_KEY = ""
+        self.__reset()
+
+    def __reset(self):
+        # State of a (re)start. Everything here is rebuilt by onStart.
+        self.__started = False  # True only once onStart has completed
+        self.__runAgain = 0
         self.__url = ""
         self.__conn = None
-        self.__API_KEY = ""
         self.__locationId = None
         self.__sensorMap = {}  # sensorsId (int) -> {"parameter": "pm25", "units": "µg/m³"}
+
+    # ------------------------------------------------------------------
+    # Logging helpers. Nothing that reaches the log may contain the API
+    # key or the Domoticz location.
+    # ------------------------------------------------------------------
+    def __scrub(self, text):
+        # Defence in depth: remove the API key from any text before logging
+        # it (response bodies, exception messages).
+        text = str(text)
+        if self.__API_KEY:
+            text = text.replace(self.__API_KEY, "<api-key>")
+        return text
+
+    @staticmethod
+    def __loggable_path(path):
+        # The automatic lookup puts the Domoticz coordinates in the query
+        # string, so only the path is ever logged.
+        base, separator, _query = path.partition("?")
+        return base + ("?<query hidden>" if separator else "")
 
     # ------------------------------------------------------------------
     # One-off blocking HTTPS helper, used only at onStart for the two
@@ -84,6 +162,7 @@ class BasePlugin:
     # widely used, accepted simplification for one-time metadata lookups.
     # ------------------------------------------------------------------
     def __blocking_get(self, path):
+        shown = self.__loggable_path(path)
         ctx = ssl.create_default_context()
         conn = http.client.HTTPSConnection(self.__API_ENDPOINT, 443, timeout=10, context=ctx)
         try:
@@ -97,38 +176,113 @@ class BasePlugin:
             resp = conn.getresponse()
             status = resp.status
             body = resp.read()
-            Domoticz.Debug("Blocking GET {} -> HTTP {}".format(path, status))
+            Domoticz.Debug("Blocking GET {} -> HTTP {}".format(shown, status))
             if status != 200:
                 Domoticz.Error(
                     "OpenAQ request {} returned HTTP {}: {}".format(
-                        path, status, body[:200]
+                        shown, status, self.__scrub(body[:200].decode("utf-8", "ignore"))
                     )
                 )
                 return None
             return json.loads(body.decode("utf-8", "ignore"))
         except Exception as e:
-            Domoticz.Error("OpenAQ request {} failed: {}".format(path, e))
+            Domoticz.Error(
+                "OpenAQ request {} failed: {}".format(shown, self.__scrub(e))
+            )
             return None
         finally:
             conn.close()
 
-    def __discover_location_id(self, lat, lon, radius_m):
+    def __domoticz_coordinates(self):
+        # Only called when the automatic lookup needs them. The values are
+        # never logged.
+        raw = Settings.get("Location") or ""
+        parts = [part.strip() for part in str(raw).split(";")]
+        lat = lon = None
+        if len(parts) == 2:
+            try:
+                lat, lon = float(parts[0]), float(parts[1])
+            except ValueError:
+                lat = lon = None
+        if (
+            lat is None
+            or not math.isfinite(lat)
+            or not math.isfinite(lon)
+            or not -90.0 <= lat <= 90.0
+            or not -180.0 <= lon <= 180.0
+        ):
+            Domoticz.Error(
+                "The Domoticz location is not set or not valid "
+                "(Setup > Settings > System > Location). Set it, or enter an "
+                "OpenAQ Location ID to skip the automatic lookup."
+            )
+            return None
+        # OpenAQ uses at most 4 decimal places and truncates the rest.
+        return round(lat, 4), round(lon, 4)
+
+    def __parse_radius(self, raw):
+        text = str("" if raw is None else raw).strip().replace(",", ".")
+        if text == "":
+            Domoticz.Log(
+                "Radius is empty; using the default of {} km".format(DEFAULT_RADIUS_KM)
+            )
+            return DEFAULT_RADIUS_KM
+        try:
+            km = float(text)
+        except ValueError:
+            km = None
+        if km is None or not math.isfinite(km) or km <= 0:
+            Domoticz.Log(
+                "Radius '{}' is not a positive number; using the default of {} km".format(
+                    raw, DEFAULT_RADIUS_KM
+                )
+            )
+            return DEFAULT_RADIUS_KM
+        if km > MAX_RADIUS_KM:
+            Domoticz.Log(
+                "Radius {:g} km is above the OpenAQ maximum of {} km; using {} km".format(
+                    km, MAX_RADIUS_KM, MAX_RADIUS_KM
+                )
+            )
+            return MAX_RADIUS_KM
+        return km
+
+    def __discover_location_id(self, lat, lon, radius_km):
+        radius_m = max(1, int(round(radius_km * 1000)))
+        radius_km = radius_m / 1000.0  # log exactly what is sent to OpenAQ
         qs = urllib.parse.urlencode(
             {"coordinates": "{},{}".format(lat, lon), "radius": radius_m, "limit": 1}
+        )
+        Domoticz.Log(
+            "Looking for an OpenAQ location within {:g} km of the Domoticz location".format(
+                radius_km
+            )
         )
         data = self.__blocking_get("/v3/locations?{}".format(qs))
         if not data or not data.get("results"):
             Domoticz.Error(
-                "No OpenAQ location found within {} m of {},{}".format(radius_m, lat, lon)
+                "No OpenAQ location found within {:g} km of the Domoticz location. "
+                "Increase the radius (maximum {} km) or enter an OpenAQ Location ID.".format(
+                    radius_km, MAX_RADIUS_KM
+                )
             )
             return None
         loc = data["results"][0]
+        location_id = loc.get("id")
+        if location_id is None:
+            Domoticz.Error("OpenAQ returned a location without an ID")
+            return None
         Domoticz.Log(
-            "Auto-selected nearest OpenAQ location: {} (id {})".format(
-                loc.get("name", "?"), loc.get("id")
+            "Auto-selected OpenAQ location '{}' (id {}): the first location OpenAQ "
+            "returned within {:g} km, which is not necessarily the nearest one.".format(
+                loc.get("name", "?"), location_id, radius_km
             )
         )
-        return loc.get("id")
+        Domoticz.Log(
+            "To keep using this location, enter {} in the 'OpenAQ Location ID' "
+            "hardware field.".format(location_id)
+        )
+        return location_id
 
     def __load_sensor_map(self, location_id):
         data = self.__blocking_get("/v3/locations/{}".format(location_id))
@@ -155,43 +309,17 @@ class BasePlugin:
         self.__sensorMap = mapping
         return True
 
-    def onStart(self):
-        Domoticz.Debug("onStart called")
-        if Parameters["Mode6"] == "Debug":
-            Domoticz.Debugging(1)
-        else:
-            Domoticz.Debugging(0)
-        # Images
-        if "xfr_openaq2" not in Images:
-            Domoticz.Image("xfr_openaq2.zip").Create()
-        image = Images["xfr_openaq2"].ID
-        Domoticz.Debug("Image created. ID: {}".format(image))
-
-        # API key
-        self.__API_KEY = Parameters["Mode2"]
+    def __configure(self):
+        # Validates the hardware settings and does the startup lookups.
+        # Returns True when the plugin can run. Otherwise the reason has
+        # been logged and False is returned.
+        self.__API_KEY = (Parameters.get("Mode2") or "").strip()
         if self.__API_KEY == "":
             Domoticz.Error("Unable to read openaq API-KEY from settings")
             return False
 
-        # Radius (only used for auto-discovery fallback, when Mode3 is blank)
-        try:
-            self.__radius = int(Parameters["Mode1"])
-        except (ValueError, KeyError):
-            self.__radius = 10
-        if self.__radius <= 0:
-            self.__radius = 10
-        radius_m = self.__radius * 1000
-
-        # Domoticz's own location, used only for auto-discovery
-        loc = Settings["Location"].split(";")
-        lat = loc[0]
-        lon = loc[1]
-        if lat is None or lon is None:
-            Domoticz.Error("Unable to parse coordinates")
-            return False
-
         # Resolve the OpenAQ Location ID: explicit param wins, else auto-detect once
-        locId = Parameters.get("Mode3", "").strip()
+        locId = (Parameters.get("Mode3") or "").strip()
         if locId:
             try:
                 self.__locationId = int(locId)
@@ -200,8 +328,21 @@ class BasePlugin:
                     "OpenAQ Location ID must be numeric, got '{}'".format(locId)
                 )
                 return False
+            if self.__locationId <= 0:
+                self.__locationId = None
+                Domoticz.Error(
+                    "OpenAQ Location ID must be a positive number, got '{}'".format(locId)
+                )
+                return False
         else:
-            self.__locationId = self.__discover_location_id(lat, lon, radius_m)
+            # Domoticz's own location and the radius are only needed here
+            coordinates = self.__domoticz_coordinates()
+            if coordinates is None:
+                return False
+            self.__radius = self.__parse_radius(Parameters.get("Mode1"))
+            self.__locationId = self.__discover_location_id(
+                coordinates[0], coordinates[1], self.__radius
+            )
             if self.__locationId is None:
                 return False
 
@@ -211,8 +352,17 @@ class BasePlugin:
 
         self.__url = self.__API_URL_LATEST.format(self.__locationId)
         Domoticz.Debug("url: {}".format(self.__url))
+        return True
 
-        # Create devices
+    def __create_devices(self):
+        # Images
+        if "xfr_openaq2" not in Images:
+            Domoticz.Image("xfr_openaq2.zip").Create()
+        image = Images["xfr_openaq2"].ID
+        Domoticz.Debug("Image created. ID: {}".format(image))
+
+        # Create devices. Units 1-10 and their definitions must not change:
+        # existing devices and their history depend on them.
         for id in self.__VALUES:
             if self.__VALUES[id][2] not in Devices:
                 self.__VALUES[id][0] = None
@@ -253,8 +403,25 @@ class BasePlugin:
                 Image=image,
                 Used=1,
             ).Create()
-        #
+
+    def onStart(self):
+        Domoticz.Debug("onStart called")
+        self.__reset()
+        if Parameters.get("Mode6") == "Debug":
+            Domoticz.Debugging(1)
+        else:
+            Domoticz.Debugging(0)
+
+        if not self.__configure():
+            Domoticz.Error(
+                "OpenAQ plugin not started - see the message above. It stays idle "
+                "until the hardware is restarted or updated."
+            )
+            return False
+
+        self.__create_devices()
         config_2_log()
+
         # Setup async connection for the recurring /latest poll
         self.__conn = Domoticz.Connection(
             Name=self.__API_CONN,
@@ -263,15 +430,21 @@ class BasePlugin:
             Address=self.__API_ENDPOINT,
             Port="443",
         )
+        self.__started = True
         self.__conn.Connect()
+        return True
 
     def onStop(self):
         Domoticz.Debug("onStop")
+        self.__started = False
         for id in self.__VALUES:
             self.__VALUES[id][0] = None
             self.__VALUES[id][1] = None
 
     def onConnect(self, Connection, Status, Description):
+        if not self.__started:
+            Domoticz.Debug("onConnect ignored: the plugin did not start")
+            return
         Domoticz.Debug(
             "onConnect: {}, {}, {}".format(Connection.Name, Status, Description)
         )
@@ -293,7 +466,12 @@ class BasePlugin:
         Connection.Send(sendData)
 
     def onMessage(self, Connection, Data):
-        Domoticz.Debug("onMessage: {}, {}".format(Connection.Name, Data))
+        if not self.__started:
+            Domoticz.Debug("onMessage ignored: the plugin did not start")
+            return
+        Domoticz.Debug(
+            "onMessage: {}, {}".format(Connection.Name, self.__scrub(Data))
+        )
         status = int(Data["Status"])
         if Connection.Name == self.__API_CONN:
             if status == 200:
@@ -422,6 +600,9 @@ class BasePlugin:
 
     def onHeartbeat(self):
         Domoticz.Debug("onHeartbeat")
+        if not self.__started:
+            Domoticz.Debug("onHeartbeat ignored: the plugin did not start")
+            return
         Domoticz.Debug("url: {}".format(self.__url))
         # Live
         self.__runAgain -= 1
@@ -484,15 +665,33 @@ def onHeartbeat():
 ################################################################################
 # Generic helper functions
 ################################################################################
+def mask_value(name, value, loggable):
+    # Show a value only if its name is on the allow-list; mask everything else.
+    if name in loggable:
+        return value
+    if value is None or str(value) == "":
+        return EMPTY
+    return MASKED
+
+
 def config_2_log():
-    # Show parameters
+    # Show parameters. Values are masked unless the name is on the allow-list:
+    # the API key and the Domoticz location must never reach the log.
     Domoticz.Debug("Parameters count.....: {}".format(len(Parameters)))
     for x in Parameters:
-        Domoticz.Debug("Parameter '{}'...: '{}'".format(x, Parameters[x]))
+        Domoticz.Debug(
+            "Parameter '{}'...: '{}'".format(
+                x, mask_value(x, Parameters[x], LOGGABLE_PARAMETERS)
+            )
+        )
     # Show settings
     Domoticz.Debug("Settings count...: {}".format(len(Settings)))
     for x in Settings:
-        Domoticz.Debug("Setting '{}'...: '{}'".format(x, Settings[x]))
+        Domoticz.Debug(
+            "Setting '{}'...: '{}'".format(
+                x, mask_value(x, Settings[x], LOGGABLE_SETTINGS)
+            )
+        )
     # Show images
     Domoticz.Debug("Image count..........: {}".format(len(Images)))
     for x in Images:

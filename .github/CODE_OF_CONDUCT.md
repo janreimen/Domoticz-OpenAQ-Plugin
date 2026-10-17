@@ -24,7 +24,7 @@ When participating in this project:
 
 - Never publish API keys, access tokens, passwords, or other authentication secrets.
 - Do not publish your home coordinates, personal account details, or other sensitive information in issues, pull requests, or logs.
-- Redact sensitive information before attaching diagnostic output or screenshots. Debug logs contain the OpenAQ API key and the Domoticz location.
+- Redact sensitive information before attaching diagnostic output or screenshots. Versions up to 4.0 write the OpenAQ API key and the Domoticz location to Debug logs; since 4.1 they are masked, but review a log before sharing it anyway.
 - Be clear about which OpenAQ location, plugin version, and Domoticz version you have tested.
 - Do not present untested functionality as confirmed to work.
 - Remember that data availability, units and API behaviour can vary by location, data provider, and OpenAQ API version.
