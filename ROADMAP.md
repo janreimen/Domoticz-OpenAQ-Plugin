@@ -2,7 +2,7 @@
 
 The roadmap describes the intended future development of **Domoticz-OpenAQ-Plugin**.
 
-The project is currently at **4.1 — Released**.
+The project is currently at **4.2 — Released**.
 
 The roadmap deliberately separates:
 
@@ -16,11 +16,23 @@ Features are **not considered implemented** until they are released in a version
 
 ---
 
-# Current State — 4.1
+# Current State — 4.2
 
-Robustness and secret handling release. The API-key field is masked and neither the key nor your Domoticz location can reach the log. A failed start leaves the plugin idle with a clear message. The Domoticz location is only needed for the automatic lookup, the radius is validated against OpenAQ's 25 km maximum, and the auto-detect message no longer claims the nearest location. Devices 1–10 are unchanged, so upgrades keep existing devices and history. See `CHANGELOG.md`.
+Multi-station release. One hardware instance can read up to 20 OpenAQ stations: a comma-separated list of Location IDs, or an automatic lookup of the nearest *Max auto-detected stations* (default 3), ranked by distance inside the plugin. Every station owns a block of ten devices (the first station keeps units 1–10), tagged with its location ID so that it always finds its own devices again, whatever the order of the list, a temporary failure or a removed ID. Devices of 4.0 and 4.1 are recognised and kept. A station that cannot be set up is skipped and reported, and the startup lookups stop as soon as it is clear that every request will fail. See `CHANGELOG.md`.
 
-Under the hood since 4.0: OpenAQ API v3, one OpenAQ location per hardware instance, seven pollutant sensors, an Air Quality Index, a Pollutants alert and an Info device. Read-only.
+Since 4.1: the API-key field is masked and neither the key nor your Domoticz location can reach the log; a failed start leaves the plugin idle with a clear message. Since 4.0: OpenAQ API v3, seven pollutant sensors, an Air Quality Index, a Pollutants alert and an Info device. Read-only.
+
+---
+
+# Support policy
+
+| Version | Supported |
+|---|---|
+| 4.2.x | Yes. Current release. |
+| 4.1.x | Yes. |
+| 4.0 and earlier | No. |
+
+**Support for versions before 4.2 will end in a future release.** From then on only 4.2 and later are supported, and new code may stop being tested against upgrades from earlier versions. The date is not fixed; it will be announced in `CHANGELOG.md`. Moving from 4.1 to 4.2 needs no other action than updating the plugin; going back to 4.1 is described in `DEPLOY.md`.
 
 ---
 
@@ -47,8 +59,9 @@ Nothing is currently scheduled. The items under Potential are the candidates for
 * **Staleness**: mark a pollutant device as timed out when its newest reading is older than a configurable age.
 * **Last measurement time** as a text device.
 * **Configurable poll interval** (the source notes "1 hour or use a parameter").
-* **Nearest-location choice** that does not depend on result ordering, for example by requesting several locations and choosing by distance in the plugin.
-* **Several locations** per hardware instance, as earlier versions scanned every location inside the radius.
+* **A combined level across stations**, for example the worst Air Quality Index of all stations as one extra device.
+* **Rank more than the first 100 locations** of the automatic lookup by paging through OpenAQ's results, for very dense areas.
+* **Fewer startup requests**: use the sensors that the location search may already return, instead of one more lookup per station (to be confirmed against the live API).
 * **GitHub Actions** workflow running `tests.py` on every push and pull request.
 * **PyPluginStore** listing, with a `registry.json` entry in the PyPluginStore repository.
 
@@ -57,7 +70,8 @@ Nothing is currently scheduled. The items under Potential are the candidates for
 # API-dependent
 
 * Additional parameters that OpenAQ may report at a location (the plugin currently ignores everything except BC, CO, NO<sub>2</sub>, O<sub>3</sub>, PM<sub>10</sub>, PM<sub>2.5</sub> and SO<sub>2</sub>).
-* Distance-ordered location search, if OpenAQ adds an `order_by` value for it.
+* Distance-ordered location search, if OpenAQ adds an `order_by` value for it. The plugin ranks the results itself until then.
+* A single request for the latest values of several locations, if OpenAQ offers one. Today every station costs one request per poll.
 
 ---
 

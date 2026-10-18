@@ -6,11 +6,14 @@ Security fixes are intended for the current release.
 
 | Version | Supported |
 |---|---|
+| 4.2.x | ✅ Supported (current release) |
 | 4.1.x | ✅ Supported |
 | 4.0.x | ❌ Not supported: shows the API key in clear text in the hardware form, and writes the key and your location to the log with Debug on (and your coordinates to the log on a failed lookup) |
 | < 4.0 | ❌ Not supported: these versions use OpenAQ API versions that OpenAQ has retired |
 
-The current release is **4.1**. Upgrading from 4.0 is safe: devices and history are kept.
+The current release is **4.2**. Upgrading from 4.1 or 4.0 is safe: devices and history are kept.
+
+**Support policy.** 4.2 and 4.1 are supported today. Support for versions before 4.2 will end in a future release; from then on only 4.2 and later receive fixes. Upgrade to 4.2 (it needs no other action than updating the plugin, see `README.md`) so that you are not left behind. The date is not fixed; it will be announced in `CHANGELOG.md` and `ROADMAP.md`.
 
 ## Reporting a vulnerability
 
@@ -33,9 +36,11 @@ The OpenAQ API key is entered in the Domoticz hardware configuration (field **Op
   - The API key is scrubbed from logged response text and error messages.
   - These guarantees are covered by tests in `tests.py`. The plugin does not control Domoticz's own log lines.
 - **Older versions leak.** Versions up to 4.0 write the key and your location to the Debug log, and your coordinates also to the normal log when the automatic lookup fails. **If you ever shared a log from such a version, rotate your key.**
-- **Where the key goes.** The key is sent only to `api.openaq.org`, in the `X-API-Key` header, over HTTPS.
+- **Entries are never echoed with the key.** Text typed into the Location IDs, radius or Max auto-detected stations fields is scrubbed of the API key and shortened before a message repeats it, so a key pasted into the wrong field does not reach the log (4.1 and earlier repeated it).
+- **Where the key goes.** The key is sent only to `api.openaq.org`, in the `X-API-Key` header, over HTTPS. With several stations the same key is used for every station: one request per station per hour, and one lookup per station at startup.
 - **Nothing is written to disk.** The plugin keeps readings in memory and creates no state, cache or log files of its own.
-- **Your location** is sent to OpenAQ only in the automatic lookup request (rounded to four decimal places). With an OpenAQ Location ID entered, the plugin does not read your Domoticz location at all.
+- **Your location** is sent to OpenAQ only in the automatic lookup request (rounded to four decimal places). With OpenAQ Location IDs entered, the plugin does not read your Domoticz location at all. The distances the plugin computes to rank the locations are never logged.
+- **Data from OpenAQ is not trusted.** Station names become part of Domoticz device names, so they are stripped of markup and control characters and shortened to 40 characters. Malformed answers are rejected with an error instead of raising an exception.
 - **Rotating a key.** If a key may have been exposed, rotate it on your OpenAQ account page (<https://explore.openaq.org/account>) and enter the new key in Domoticz.
 
 Protect the following as sensitive configuration or data:
@@ -81,6 +86,6 @@ The plugin only sends `GET` requests to OpenAQ. It does not control any device, 
 
 Communication with OpenAQ uses HTTPS. Do not disable TLS certificate verification as a workaround for connectivity problems.
 
-The two one-off startup lookups use Python's default SSL context, with certificate and hostname verification enabled (covered by a test in `tests.py`). The recurring hourly poll uses Domoticz's own HTTPS connection, so its certificate handling is that of your Domoticz build.
+The one-off startup lookups (one location search at most, and one lookup per station) use Python's default SSL context, with certificate and hostname verification enabled (covered by a test in `tests.py`). The recurring hourly poll uses Domoticz's own HTTPS connection, so its certificate handling is that of your Domoticz build.
 
 The plugin uses only the Python standard library and no third-party packages.

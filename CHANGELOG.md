@@ -4,11 +4,51 @@ All notable changes to **Domoticz-OpenAQ-Plugin** are documented in this file.
 
 The project follows [Semantic Versioning](https://semver.org/) where practical.
 
-* **Tag format:** release tags are plain numeric (`MAJOR.MINOR` or `MAJOR.MINOR.PATCH`, optionally `v`-prefixed, for example `v4.1`) with no `-alpha`/`-beta` suffixes. This is the same convention as Domoticz-MySkodaAPI and is compatible with PyPluginStore's release-channel tag matcher (`^v?[0-9]+(?:\.[0-9]+){1,3}$`). Pre-release iteration happens as unreleased commits on the `development` branch.
+* **Tag format:** release tags are plain numeric (`MAJOR.MINOR` or `MAJOR.MINOR.PATCH`, optionally `v`-prefixed, for example `4.2`) with no `-alpha`/`-beta` suffixes. This is the same convention as Domoticz-MySkodaAPI and is compatible with PyPluginStore's release-channel tag matcher (`^v?[0-9]+(?:\.[0-9]+){1,3}$`). Pre-release iteration happens as unreleased commits on the `development` branch.
 
 ---
 
 # Release History
+
+## [4.2] - 2026-10-17
+
+Multi-station support. One hardware instance can now read several OpenAQ stations ("stations" are what OpenAQ calls locations). **Nothing has to be re-created when upgrading from 4.1 or 4.0**: the plugin key (`xfr_openaq4`) is unchanged, the first station keeps device units 1–10, and an existing single Location ID is simply a list of one.
+
+### Added
+
+* **Several stations per hardware instance (up to 20).**
+  * **OpenAQ Location IDs** (hardware field `Mode3`, previously *OpenAQ Location ID*) takes a comma-separated list, for example `9645,1140`. Spaces are ignored. An entry that is not a positive whole number is ignored and reported, a duplicate is used once, and entries after the 20th are ignored and reported.
+  * **Max auto-detected stations** (new hardware field `Mode4`, default `3`, at most 20) says how many stations the automatic lookup uses when the Location IDs are blank. It is ignored when IDs are entered.
+* **A block of ten units per station.** The first station uses units 1–10 as before, the second 11–20, and so on up to units 191–200. Every station has its own connection, readings, Info, Pollutants alert and Air Quality Index device, so the values of different stations never mix. The Air Quality Index of each station is unchanged; there is no combined level.
+* **A station always finds its own devices again.** New devices are tagged with their location ID (the Domoticz *DeviceID* `OAQ<id>-<unit in block>`). At startup every station gets the block that carries its ID, and the lowest free block when it has none. Reordering the list, removing an ID, adding one in front, or a temporary failure of one station therefore cannot move a station onto the devices of another one, which would have mixed their history. The block of a station that is no longer used stays reserved for it, with its devices and history untouched, and the log says so at every start; adding the ID again continues the history. With all 20 blocks in use, a new station is skipped and reported.
+* **Devices created by 4.0 and 4.1 are recognised.** They carry no tag, so the plugin identifies their station from the **Info** device (`OpenAQ Location ID: <id>`, which every poll writes) and keeps them with that station. Devices that were never updated go to the first station without a block.
+* **Device names say which station they belong to** when several stations are configured (`PM2.5 (Beidweiler)`, with ` #<id>` added when two stations share a name). With one station the names are exactly those of 4.0 and 4.1. Existing devices are never renamed. Station names come from OpenAQ and are stripped of markup and control characters and shortened to 40 characters.
+* **The automatic lookup ranks by distance itself.** OpenAQ documents no distance ordering for `GET /v3/locations`, so the plugin requests a full page (100 locations) and ranks them by the coordinates OpenAQ returns for each, falling back to OpenAQ's `distance` field (never a mix of the two), and finally to OpenAQ's order, which the log then says is not necessarily the nearest. A full page is reported, because there may be more locations in the radius. Coordinates and distances are never logged.
+* **Stations that already have devices are kept first** by the automatic lookup, so history carries on when a nearer station appears, and the log says `, kept because it already has devices`. The log ends with the exact list to copy into the Location IDs field: `To keep using the auto-detected location(s), enter <id1>,<id2>,<id3> in the 'OpenAQ Location IDs' hardware field.`
+* **A station that cannot be set up is skipped, not fatal.** The plugin starts if at least one station works, and logs `OpenAQ started with <k> of <n> stations. Not configured: <ids>.` The lookups stop as soon as a request shows that all further ones would fail too (OpenAQ unreachable, API key rejected with 401/403, rate limit 429), instead of waiting for one 10 s timeout per station: `Skipping the remaining <n> OpenAQ location(s): <reason>.`
+* **Supported versions.** 4.2 and 4.1 are supported; support for versions before 4.2 will end in a future release (see `README.md`, `SECURITY.md` and `ROADMAP.md`).
+
+### Changed
+
+* **Upgrading an automatic-lookup instance adds no devices.** An empty *Max auto-detected stations* field, which is what an instance created by 4.1 has until its hardware page is saved, means `1`, which is what 4.1 did; the plugin keeps the station it already uses even if a nearer one exists. The form offers `3` for new hardware. A value that is not a positive whole number uses `3`; a value above 20 uses 20.
+* The automatic lookup requests 100 locations (4.1: 1) and ranks them. The log lines changed accordingly (`Looking for up to <n> OpenAQ location(s) within <r> km ...`, `OpenAQ returned <n> location(s); the nearest ones are used.`, `Auto-detected OpenAQ location <i> of <n>: '<name>' (id <id>)`), replacing `Auto-selected OpenAQ location ...` and `To keep using this location ...` of 4.1.
+* Connections are named `openaq_<id>` (4.1: `openaq`), so the status messages read `openaq_<id> returned a status: <status>`.
+* Hardware labels: `OpenAQ Location IDs, comma separated (blank = auto-detect)`, `Max auto-detected stations` (new) and `Radius (km, max 25, used only if Location IDs is blank)`. The field positions and stored values are unchanged.
+* `OpenAQ Location ID must be numeric` and `... must be a positive number` are replaced by `OpenAQ Location ID '<entry>' is not a positive whole number and is ignored` and, when nothing usable is left, `No valid OpenAQ Location ID entered`. An invalid entry in a list no longer stops the other stations.
+* The Debug dump shows the new `Mode4` value (the number of stations is harmless).
+* Version 4.2.
+
+### Fixed
+
+* **A key pasted into the wrong field was written to the log.** 4.1 repeated the text of the Location ID and radius fields in its messages. Entries are now scrubbed of the API key and shortened to 30 characters before they are repeated.
+* **A malformed answer from OpenAQ raised an exception inside `onStart`** (reproduced against 4.1: a JSON list instead of an object gave `AttributeError`, `results` holding non-objects gave `AttributeError`, a sensor without an `id` gave `KeyError`, `sensors: null` gave `TypeError`). These are now reported as a failed lookup of that station.
+
+### Documentation and repository
+
+* `README.md`, `DEPLOY.md`, `SECURITY.md`, `ROADMAP.md` and `CONTRIBUTING.md` describe the station blocks, how stations find their devices, the automatic lookup, the upgrade from 4.1, the way back to 4.1, the new log messages and the support policy. The issue and pull-request templates mention the new rules.
+* `tests.py` grew from 85 to over 170 tests. New: location-ID list parsing, device blocks and tags, reordering, removal, temporary failure, reserved and exhausted slots, recognition of 4.0/4.1 devices (from the Info device, and when tags are missing), the ranking of the automatic lookup (coordinates, distance field, OpenAQ order, malformed values, sticky stations), the *Max auto-detected stations* rules, device naming, partial failure and the fail-fast stop, the upgrade from 4.1, log hygiene for several stations, and that the documented hardware labels, version and support policy match the code.
+
+---
 
 ## [4.1] - 2026-10-16
 

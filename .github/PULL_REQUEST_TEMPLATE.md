@@ -41,8 +41,8 @@
 - **Plugin version / branch:**
 - **Domoticz version:**
 - **Operating system:**
-- **OpenAQ location ID / country:** <!-- If applicable -->
-- **Location entered or auto-detected:** <!-- If applicable -->
+- **OpenAQ location ID(s) / country:** <!-- If applicable -->
+- **Number of stations; entered or auto-detected:** <!-- If applicable -->
 
 ### Test results
 
@@ -64,7 +64,7 @@
 - [ ] This pull request targets the `development` branch.
 - [ ] I reviewed the existing code and followed the project conventions.
 - [ ] My changes are focused and do not contain unrelated modifications.
-- [ ] Device unit numbers 1–10 and their meaning are unchanged, or the change is explained above.
+- [ ] Device unit numbers (ten per station, the first station on units 1–10), the `OAQ<id>-<n>` DeviceID tags and the Info device text are unchanged, or the change is explained above with a migration.
 - [ ] I updated relevant documentation.
 - [ ] I have not included generated files or temporary development artifacts unnecessarily.
 - [ ] I have documented any tests I could not perform.

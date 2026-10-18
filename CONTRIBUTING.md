@@ -13,7 +13,7 @@ Before opening an issue or submitting a pull request:
 1. Read the project's README and existing documentation.
 2. Search existing issues and pull requests to avoid duplicates.
 3. Check whether the problem is already fixed in the development branch, and whether it is listed in `ROADMAP.md`.
-4. Make sure you are using the correct plugin version and a supported Domoticz environment.
+4. Make sure you are using the correct plugin version and a supported Domoticz environment. Plugin versions 4.2 and 4.1 are supported; support for versions before 4.2 will end in a future release (see `SECURITY.md`), so please reproduce a problem on 4.2 where you can.
 
 The plugin relies on the OpenAQ API. API behaviour, available data, rate limits and station coverage may change without notice, and the data available differs from location to location.
 
@@ -25,7 +25,7 @@ Include the following information whenever relevant:
 
 - Plugin version.
 - Domoticz version and operating system.
-- The OpenAQ location ID, and whether you entered it or the plugin chose it automatically.
+- The OpenAQ location ID(s), whether you entered them or the plugin chose them automatically, and how many stations you use.
 - Steps to reproduce the issue.
 - Expected and actual behaviour.
 - Relevant, redacted log output.
@@ -105,8 +105,8 @@ Replace the example branch names and commit message with ones that describe your
 - Respect OpenAQ's rate limits (60 requests per minute and 2,000 per hour on the free tier) and keep the recurring poll to a single request per interval.
 - Do not log the API key or other credentials, and do not log the Domoticz location or any request path that contains it, at any log level. New log output goes through the existing masking (`mask_value`, the path and key scrubbing); `tests.py` fails if the key or the location reaches any log line, so add a test for new log output that touches request data.
 - Log messages quoted in `README.md` and `DEPLOY.md` must exist in `plugin.py`; a test checks this, so update the docs when you change a message.
-- Preserve the existing Domoticz device unit numbers (1–10) and their meaning, so existing devices and their history survive an upgrade.
-- Ensure that a failure in one operation does not disrupt unrelated devices or the rest of the plugin.
+- Preserve the Domoticz device unit numbers and their meaning, so existing devices and their history survive an upgrade. Each station owns a block of ten units: the first station uses units 1–10 (as in 4.0 and 4.1), further stations 11–20, 21–30 and so on, up to 20 stations. Within a block the order of the pollutants is fixed. The `OAQ<id>-<n>` DeviceID tag and the text `OpenAQ Location ID: <id>` of the Info device are how the plugin recognises which station owns a block, and the Info text is also how devices created by 4.0 and 4.1 are recognised, so neither format may change without a migration and a test that covers it.
+- Ensure that a failure in one operation does not disrupt unrelated devices or the rest of the plugin. In particular, one failing station must never stop the others, and a station must never receive another station's readings.
 
 ## 6. Testing
 
@@ -134,7 +134,7 @@ If you cannot test against a real Domoticz installation, state that clearly in y
 
 Testing with additional OpenAQ locations is particularly valuable, because the pollutants and units available differ from station to station and country to country.
 
-When reporting compatibility, include the OpenAQ location ID, the country, the plugin version, and which of the pollutants (BC, CO, NO<sub>2</sub>, O<sub>3</sub>, PM<sub>10</sub>, PM<sub>2.5</sub>, SO<sub>2</sub>) the location reports, including the unit OpenAQ gives for each.
+When reporting compatibility, include the OpenAQ location ID (one per station), the country, the plugin version, and which of the pollutants (BC, CO, NO<sub>2</sub>, O<sub>3</sub>, PM<sub>10</sub>, PM<sub>2.5</sub>, SO<sub>2</sub>) the location reports, including the unit OpenAQ gives for each.
 
 Distinguish between:
 
@@ -179,7 +179,7 @@ Release and stable-branch changes are managed by the project maintainer.
 
 Do not independently publish a release, change release tags, or merge into `master` without coordination.
 
-Keep development changes focused and ensure that the version shown in `plugin.py`, `README.md`, `CHANGELOG.md`, `SECURITY.md` and `ROADMAP.md` stays consistent when requested by the maintainer. `tests.py` checks this.
+Keep development changes focused and ensure that the version shown in `plugin.py`, `README.md`, `CHANGELOG.md`, `SECURITY.md` and `ROADMAP.md` stays consistent when requested by the maintainer. `tests.py` checks this, and also checks that the support policy (4.2 and 4.1 supported, versions before 4.2 ending in a future release) is stated in `README.md`, `SECURITY.md` and `ROADMAP.md`. Releases are tagged with the plain version number, for example `4.2`.
 
 ## 11. Questions and Support
 

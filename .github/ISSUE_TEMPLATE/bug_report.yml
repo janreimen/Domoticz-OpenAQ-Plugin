@@ -17,8 +17,8 @@ body:
     id: plugin_version
     attributes:
       label: Plugin version
-      description: The exact version of your installation.
-      placeholder: "e.g. 4.0"
+      description: The exact version of your installation. 4.2 and 4.1 are supported; support for versions before 4.2 will end in a future release.
+      placeholder: "e.g. 4.2"
     validations:
       required: true
 
@@ -43,18 +43,18 @@ body:
   - type: input
     id: location_id
     attributes:
-      label: OpenAQ location ID and country
-      description: The numeric OpenAQ location ID the plugin is reading, and the country, if known.
-      placeholder: "e.g. 9645 (LU)"
+      label: OpenAQ location ID(s) and country
+      description: The numeric OpenAQ location ID(s) the plugin is reading (comma separated if you use several stations), and the country, if known.
+      placeholder: "e.g. 9645,1140 (LU)"
     validations:
       required: false
 
   - type: dropdown
     id: location_mode
     attributes:
-      label: How was the location chosen?
+      label: How were the stations chosen?
       options:
-        - I entered the Location ID
+        - I entered the Location ID(s)
         - Left blank (auto-detected)
         - Not sure
     validations:
@@ -67,7 +67,8 @@ body:
       options:
         - Installation or configuration
         - API key or authentication
-        - Location lookup (auto-detect or Location ID)
+        - Station lookup (auto-detect or Location IDs)
+        - Several stations (devices, names or values mixed up)
         - Pollutant values or units
         - Air Quality Index or Pollutants alert
         - Info device
